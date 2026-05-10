@@ -1,4 +1,7 @@
 #include <iostream>
+#include <memory>
+#include <vector>
+#include <utility>
 const unsigned long long m = 1ULL << 31;
 //================================================================================================================
 long long randint()
@@ -22,19 +25,19 @@ long long randint()
 //================================================================================================================
 class Skip_List
 {
-	Skip_List(Node *h = 0, Node *t = 0)
+public:
+	Skip_List(Node *h = nullptr, Node *t = nullptr)
 		: head(h), tail(t)
 	{
 	}
 
-	//							Skip_List build_lvl(Skip_List lvl) const;
-	//							Skip_List skip_list(Skip_List l) const;
-	Node *search(int k);
+	Node *search(int k) const;
 	Node *insert(int k);
 
 private:
-	Node *head;			// start list
-	Node *tail;			// end list
+	Node *head;											// start list
+	Node *tail;											// end list
+	std::vector<std::unique_ptr<Node>> storage;			// хранилище всех узлов
 	int max_lvl = 32;
 };
 //================================================================================================================
@@ -50,134 +53,147 @@ struct Node
 	int key;			// element key
 };
 //================================================================================================================
-Node *Skip_List::search(int k)
+Node *Skip_List::search(int k) const
 {
 	Node *current = head;
 
 	if (current == nullptr)
 		return nullptr;
 
-	while (current)
+	while (current != nullptr && current != tail)	// Цикл пока не пришли в конец списка
 	{
 		if (current->next == nullptr)
 			return nullptr;
 
-		else if (current->next->key > k)		// Проверяем значение следующего элемента на текущем уровне
+		if (current->next->key > k)				// Проверяем значение следующего элемента на текущем уровне
 		{
 			if (current->down == nullptr)
 				return nullptr;
-			else
-				current = current->down;		// Двигаем поиск на уровень ниже
+				current = current->down;			// Двигаем поиск на уровень ниже
 		}
 
-		 else if (current->next == tail)		// Проверяем не является ли следующим элементом конец Списка
+		 else if (current->next == tail)			// Проверяем не является ли следующим элементом конец Списка
 		{
 			if (current->down == nullptr)
 				return nullptr;
-			else
-			current = current->down;			// Двигаем поиск на уровень ниже
+			current = current->down;				// Двигаем поиск на уровень ниже
 		}
 
-		else if (current->next->key == k)		// Следующий элемент соответствует искомому
-			return current->next;				// Вернули ссылку на найденный элемент
+		else if (current->next->key == k)			// Следующий элемент соответствует искомому
+			return current->next;					// Вернули ссылку на найденный элемент
 
 		else if (current->next->key < k)
-			current = current->next;			// Двигаемся к следующему элементу на текущем уровне
+			current = current->next;				// Двигаемся к следующему элементу на текущем уровне
 
 		else return nullptr;
 	}
+	return nullptr;
 }
 //================================================================================================================
 Node *Skip_List::insert(int k)
 {
-	bool result;
-	int count = 1;
+	bool result = 1;
+	int height = 1;
 	Node *current = head;
+
+	Node *update[32] = {};					// Хранилище: после каких узлов строится башня=(next)
+	Node *tower[32] = {};					// Хранилище: для строительства этажей башни===(down)
 
 	Node *n = nullptr;
 	Node *d = nullptr;
 
-	Node *ptr = new Node(n, d, k);
+	auto node = std::make_unique<Node>(n, d, k);// Создаёт Node(n,d,k) и заворачивает в unique_ptr
+
+	Node *ptr = node.get();
+	storage.push_back(std::move(node));
+
+	tower[0] = ptr;							// Добавляю в памяти "на 0 этаж" вставляемый объект
 
 	if (current == nullptr)
 		return nullptr;
 
-	while (count < max_lvl)
-	{
-		result = (randint() < m / 2) ? 0 : 1;
+	// Генерация высоты
 
+	while (result != 0 && height < max_lvl)
+	{
+		result = (randint() < m / 2) ? 0 : 1;	// Получаем рандом для строительства уровней
+		if (result != 0)
+			height++;									// Записываем количество получившихся этажей
+		else break;
+	}
+
+	int lvls = height - 1;
+
+	// Поиск + заполнение update
+
+	for (int i = height, j = lvls; i != 0; i--)
+	{
 		if (current->next == nullptr)
 			return nullptr;
 
 		else if (current->next->key > k)
 		{
-			if (current->down == nullptr)
+			update[j] = current;				// Вносим в хранилище куда будем вставлять узел на текущем уровне
+			
+			if (current->down != nullptr)
 			{
-
-				current->next = ptr->next;
-				ptr->next = 
+				current = current->down;			// Двигаем поиск на уровень ниже
+				j--;
 			}
-			else
-				current = current->down;		// Двигаем поиск на уровень ниже
 		}
 
-		else if (current->next == tail)			// Проверяем не является ли следующим элементом конец Списка
+		else if (current->next == tail)				// Проверяем не является ли следующим элементом конец Списка
 		{
-			if (current->down == nullptr)
-				return nullptr;
-			else
-				current = current->down;		// Двигаем поиск на уровень ниже
+			update[j] = current;				// Добавляем в хранилище
+
+			if (current->down != nullptr)
+			{
+				current = current->down;
+				j--;
+			}
 		}
 
 		else if (current->next->key == k)		// Следующий элемент соответствует искомому
-			return nullptr;						// Вернули ссылку на нyль
+			return nullptr;						// Вернули ссылку на нyль(избегаем дублей)
 
 		else if (current->next->key < k)
+		{
 			current = current->next;			// Двигаемся к следующему элементу на текущем уровне
+			update[j] = current;				// Добавляем в хранилище элемент к которому перешли
+		}
 
-
-
-		else return nullptr;
+		else
+			return nullptr;
 	}
-}
-//================================================================================================================
-//			Skip_List Skip_List::build_lvl(Skip_List lvl) const
-//			{
-//				Skip_List next_lvl = {};
-//				next_lvl.head->down = lvl.head;
-//				next_lvl.tail->down = lvl.tail;
-//			
-//				Node *i = lvl.head->next->next;
-//				Node *cur = next_lvl.head;
-//			
-//				while (i != nullptr && i->next != nullptr)
-//					cur->next = static_cast<Node *>(key, i, cur->next);
-//			
-//				cur = cur->next;
-//				i = i->next->next;
-//			
-//				return next_lvl;
-//			}
-//================================================================================================================
-//			Skip_List Skip_List::skip_list(Skip_List l) const
-//			{
-//				Skip_List lvl;
-//				Node *i = l.head;
-//				Node *j = lvl.head;
-//			
-//				while (j != l.tail)
-//				{
-//					i->next = static_cast<Node *>(j->key, 0, j->next);
-//					i = i->next;
-//					j = j->next;
-//				}
-//			
-//				while (lvl.size() > 2)
-//					lvl = build_lvl(lvl);
-//			
-//				return lvl;
-//			}
 
+	// Создать все узлы 
+
+	for (int j = 1; j < height; j++)
+	{												// Создаём узел на 1 ур выше
+			auto temp_ptr = std::make_unique<Node>(n, d, k);
+			Node *raw = temp_ptr.get();
+			storage.push_back(std::move(temp_ptr));
+			tower[j] = raw;					// Заполяняется башня уровнями
+
+				raw->down = tower[j - 1];	// Строим *down связи (снизу-вверх) башни
+				
+				//	raw->down = nullptr;				// Устанавливаем down на 0 уровне
+	}
+
+	// Вставить все узлы ч/з update
+
+	while (lvls != -1)
+	{
+		if (update[lvls] != nullptr)				// проверим что не разыименовываем nullptr
+		{
+			tower[lvls]->next = update[lvls]->next;
+			update[lvls]->next = tower[lvls];
+		}
+		lvls--;
+	}
+
+	return tower[0];
+}
 //================================================================================================================
 int main()
 {
