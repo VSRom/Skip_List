@@ -174,10 +174,7 @@ Node *Skip_List::insert(int k)
 			Node *raw = temp_ptr.get();
 			storage.push_back(std::move(temp_ptr));
 			tower[j] = raw;					// Заполяняется башня уровнями
-
-				raw->down = tower[j - 1];	// Строим *down связи (снизу-вверх) башни
-				
-				//	raw->down = nullptr;				// Устанавливаем down на 0 уровне
+			raw->down = tower[j - 1];	// Строим *down связи (снизу-вверх) башни
 	}
 
 	// Вставить все узлы ч/з update
@@ -186,7 +183,7 @@ Node *Skip_List::insert(int k)
 	{
 		if (update[lvls] != nullptr)				// проверим что не разыименовываем nullptr
 		{
-			tower[lvls]->next = update[lvls]->next;
+			tower[lvls]->next = update[lvls]->next;	// Строим Next связи на вставляемый объект
 			update[lvls]->next = tower[lvls];
 		}
 		lvls--;
