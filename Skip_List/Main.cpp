@@ -1,9 +1,15 @@
+#include <vector>
 #include <iostream>
 #include <memory>
 #include <list>
 #include <utility>
 #include <unordered_map>
 #include <ctime>
+#include <shared_mutex>
+#include <thread>
+#include <chrono>
+#include <limits>
+#include <mutex>
 //================================================================================================================
 long long randint()
 {
@@ -24,33 +30,12 @@ long long randint()
 	return state;
 }
 //================================================================================================================
-class Skip_List
-{
-public:
-	Skip_List(Node *h = nullptr, Node *t = nullptr)
-		: head(h), tail(t)
-	{
-	}
-
-	Node *search(int k);
-	Node *insert_elem(int k);
-	Node *erase(int k);
-
-private:
-	int max_lvl = 32;
-	Node *head;										// start list
-	Node *tail;										// end list
-	std::list<std::unique_ptr<Node>> storage;		// хранилище всех узлов (из vector в list для erase)
-													// Итератор на unique_ptr<Node> в list
-	using storage_it = std::list<std::unique_ptr<Node>>::iterator;
-	std::unordered_map<int, storage_it> index;		// Ключ для итератора в storage
-};
-//================================================================================================================
 struct Node
 {
 	Node(Node *n, Node *d, int k)
 		: next(n), down(d), key(k)
-	{ }
+	{
+	}
 
 	Node *next;			// link to next element lvl
 	Node *down;			// link to element down
@@ -58,27 +43,73 @@ struct Node
 	int key;			// element key
 };
 //================================================================================================================
-Node *Skip_List::search(int k)
+class Skip_List
 {
+public:
+	Skip_List(Node *h = nullptr, Node *t = nullptr)
+		: head(h), tail(t)
+	{
+		if (!head && !tail) {				// Создание границ для head/tail
+			auto h_node = std::make_unique<Node>(nullptr, nullptr, INT_MIN);
+			auto t_node = std::make_unique<Node>(nullptr, nullptr, INT_MAX);
+			head = h_node.get();
+			tail = t_node.get();
+			head->next = tail;
+			storage.push_back(std::move(h_node));
+			storage.push_back(std::move(t_node));
+		}
+	}
+
+	Node *search(int k) const;
+	Node *insert_elem(int k);
+	Node *erase_elem(int k);
+													// Запрет копирования
+	Skip_List(const Skip_List &) = delete;
+	Skip_List &operator=(const Skip_List &) = delete;
+													// Разрешение перемещения
+	Skip_List(Skip_List &&) noexcept = default;
+	Skip_List &operator=(Skip_List &&) noexcept = default;
+
+	~Skip_List() = default;
+
+private:
+	int max_lvl = 32;
+	Node *head;										// start list
+	Node *tail;										// end list
+	std::list<std::unique_ptr<Node>> storage;		// хранилище уникальных указателей на узлы (из vector в list для erase)
+													// Итератор на unique_ptr<Node> в list
+	using storage_it = std::list<std::unique_ptr<Node>>::iterator;
+	std::unordered_multimap<int, storage_it> index;	// Хеш-таблтца ключ для итератора в storage (для erase)
+
+	mutable std::shared_mutex mtx_;					// mutable для блокировки в const foo
+};
+//================================================================================================================
+Node *Skip_List::search(int k) const
+{
+	std::shared_lock<std::shared_mutex> lock(mtx_);	// Блокировка на чтение
+
 	Node *current = head;
 
 	if (!current)
 		return nullptr;
 
-	while (current != nullptr && current != tail)	// Цикл пока не пришли в конец списка
-	{
-		if (!current->next)
-			return nullptr;
+	while (current && current != tail) {	// Цикл пока не пришли в конец списка
 
-		if (current->next->key > k)					// Проверяем значение следующего элемента на текущем уровне
-		{
+		if (!current->next) {
+			if (current->down)
+				current = current->down;
+			else
+				return nullptr;
+		continue;
+		}
+
+		if (current->next->key > k) {				// Проверяем значение следующего элемента на текущем уровне
 			if (!current->down)
 				return nullptr;
 				current = current->down;			// Двигаем поиск на уровень ниже
 		}
 
-		 else if (current->next == tail)			// Проверяем не является ли следующим элементом конец Списка
-		{
+		 else if (current->next == tail) {			// Проверяем не является ли следующим элементом конец Списка
 			if (!current->down)
 				return nullptr;
 			current = current->down;				// Двигаем поиск на уровень ниже
@@ -92,135 +123,142 @@ Node *Skip_List::search(int k)
 
 		else return nullptr;
 	}
-	return nullptr;
 }
 //================================================================================================================
 Node *Skip_List::insert_elem(int k)
 {
+	std::unique_lock<std::shared_mutex> lock(mtx_);	// Блокировка на запись
+
 	const unsigned long long m = 1ULL << 31;
 
-	bool result = 1;
-	int height = 1;
 	Node *current = head;
 
 	Node *update[32] = {};							// Хранилище: после каких узлов строится башня=(next)
 	Node *tower[32] = {};							// Хранилище: для строительства этажей башни===(down)
 
-	Node *n = nullptr;
-	Node *d = nullptr;
-
-	auto node = std::make_unique<Node>(n, d, k);	// Создаёт Node(n,d,k) и заворачивает в unique_ptr
-	Node *ptr = node.get();							// raw для навигации
-													// Начинаем заполнять хранилище
-	auto iter = storage.insert(storage.end(), std::move(node));
-	index[k] = iter;								// Ключ k теперь ведет на итератор index, создавая новую запись
-	tower[0] = ptr;									// Добавляю в памяти "на 0 этаж" вставляемый объект
-
 	if (!current)
 		return nullptr;
 
 	// Генерация высоты
-
-	while (result != 0 && height < max_lvl)
-	{
-		result = (randint() < m / 2) ? 0 : 1;		// Получаем рандом для строительства уровней
-		if (result != 0)
-			height++;								// Записываем количество получившихся этажей
-		else break;
-	}
-
-	int lvls = height - 1;
+    int height = 1;
+	while (height < max_lvl && (randint() & 1))
+            ++height;
 
 	// Поиск + заполнение update
 
-	for (int i = height, j = lvls; i != 0; i--)
-	{
-		if (!current->next)
-			return nullptr;
+    for (int i = max_lvl - 1; i >= 0; --i) {
+        if (!current) return nullptr;
 
-		else if (current->next->key > k)
-		{
-			update[j] = current;					// Вносим в хранилище куда будем вставлять узел на текущем уровне
-			
-			if (current->down)
-			{
-				current = current->down;			// Двигаем поиск на уровень ниже
-				j--;
-			}
-		}
+        while (current->next && current->next != tail && current->next->key < k)
+            current = current->next;
 
-		else if (current->next == tail)				// Проверяем не является ли следующим элементом конец Списка
-		{
-			update[j] = current;					// Добавляем в хранилище
+        // Проверяем не является ли следующий элемент концом списка ИЛИ следующий элемент больше чем целевой
+        if (i < height)
+            update[i] = current;
 
-			if (current->down)
-			{
-				current = current->down;
-				j--;
-			}
-		}
+        if (current->down)
+            current = current->down;
+    }
+		// Создать все узлы 
+            Node *n = nullptr;
+            Node *d = nullptr;
 
-		else if (current->next->key == k)			// Следующий элемент соответствует искомому
-			return nullptr;							// Вернули ссылку на нyль(избегаем дублей)
+            auto node = std::make_unique<Node>(n, d, k);	// Создаёт Node(n,d,k) и заворачивает в unique_ptr
+            Node *ptr = node.get();							// raw для навигации
+            // Начинаем заполнять хранилище
+            auto iter = storage.insert(storage.end(), std::move(node));
+            index.insert({ k, iter });						// Добавляем пару ключ-итератор
+            tower[0] = ptr;									// Добавляю в памяти "на 0 этаж" вставляемый объект
 
-		else if (current->next->key < k)
-		{
-			current = current->next;				// Двигаемся к следующему элементу на текущем уровне
-			update[j] = current;					// Добавляем в хранилище элемент к которому перешли
-		}
-		else
-			return nullptr;
-	}
-
-	// Создать все узлы 
-
-	for (int j = 1; j < height; j++)
-	{												// Создаём узел на 1 ур выше
+		for (int j = 1; j < height; ++j) {
+			// Создаём узел на 1 ур выше
 			auto temp_ptr = std::make_unique<Node>(n, d, k);
 			Node *raw = temp_ptr.get();				// Для навигации
-													// Продолжаем заполнять хранилище
+			// Продолжаем заполнять хранилище
 			auto temp_iter = storage.insert(storage.end(), std::move(temp_ptr));
+			index.insert({ k, temp_iter });
 			tower[j] = raw;							// Заполяняется башня уровнями
 			raw->down = tower[j - 1];				// Строим *down связи (снизу-вверх) башни
-	}
-
-	// Вставить все узлы ч/з update
-
-	while (lvls != -1)
-	{
-		if (update[lvls])							// проверим что не разыименовываем nullptr
-		{
-			tower[lvls]->next = update[lvls]->next;	// Строим Next связи на вставляемый объект
-			update[lvls]->next = tower[lvls];
 		}
-		lvls--;
-	}
+
+		// Вставить все узлы ч/з update
+
+        for (int i = 0; i < height; ++i) {
+            if (update[i]) {
+                // проверим что не разыименовываем nullptr
+                tower[i]->next = update[i]->next;	// Строим Next связи на вставляемый объект
+                update[i]->next = tower[i];
+            }
+        }
 
 	return tower[0];
 }
 //================================================================================================================
-Node *Skip_List::erase(int k)
+Node *Skip_List::erase_elem(int k)
 {
-	Node *update[32] = {};							// Хранилище: пути поиска
+    std::unique_lock<std::shared_mutex> lock(mtx_);	// Блокировка на запись
 
-	// Поиск + update[]
+    Node *update[32] = {};							// Хранилище: пути поиска
+    Node *current = head;
 
+    if (!current) return nullptr;
 
+    // Заполнение update[] - Для всех урвоней
+    for (int i = max_lvl - 1; i >= 0; --i) {
+        // Двигаемся вправо по списку пока следующий элемент меньше чем целевой
+        if (!current) break;
 
-	// Разрыв горизонтальных линий
+        while (current->next && current->next != tail && current->next->key < k)
+            current = current->next;
 
-	// Удаление из storage
+        update[i] = current;
 
-	// Коррекция потолка
+        if (current->down) current = current->down;
+    }
 
-	return nullptr;
+    Node *del_node = update[0]->next;		//Ищем удаляемый узел
+
+    if (!del_node || del_node == tail || del_node->key != k)
+        return nullptr;
+
+    // Удаление элемента на всех уровнях списка
+
+    std::vector<Node *> deling;
+
+    for (int i = 0; i < max_lvl; ++i) {
+        if (update[i]->next && update[i]->next->key == k)
+        {
+            Node *deli = update[i]->next;
+            update[i]->next = deli->next;
+            deling.push_back(deli);
+        }
+        else break;
+    }
+
+    auto map_it = index.equal_range(k);					// Получение итератора
+
+    // Удаление из storage  Находим все итераторы для нашего ключа и чистим
+
+    for (auto it = map_it.first; it != map_it.second; ++it) {
+        Node *ptr = it->second->get();
+        bool is_deling = false;
+
+    for (Node *s : deling)
+        if (s == ptr) {
+            is_deling = true;
+            break;
+        }
+
+    if (is_deling)
+        storage.erase(it->second);
+}
+	index.erase(k);									// Удаление всех пар с ключом
+
+	return del_node;								// Для возможности использовать bool - узнать статус удаления
 }
 //================================================================================================================
 int main()
 {
 	return 0;
 }
-//================================================================================================================
-//11. Разберитесь, что собой представляет список с пропусками(skip list), и реализуйте эту разновидность списка.
-// Это не простое упражнение.
 //================================================================================================================
