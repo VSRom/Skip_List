@@ -10,7 +10,60 @@
 #include <chrono>
 #include <limits>
 #include <mutex>
-#include "Skip_List.h"
+//================================================================================================================
+struct Node
+{
+	Node(Node *n, Node *d, int k)
+		: next(n), down(d), key(k)
+	{
+	}
+
+	Node *next;			// link to next element lvl
+	Node *down;			// link to element down
+
+	int key;			// element key
+};
+//================================================================================================================
+class Skip_List
+{
+public:
+	Skip_List(Node *h = nullptr, Node *t = nullptr)
+		: head(h), tail(t)
+	{
+		if (!head && !tail) {				// Создание границ для head/tail
+			auto h_node = std::make_unique<Node>(nullptr, nullptr, INT_MIN);
+			auto t_node = std::make_unique<Node>(nullptr, nullptr, INT_MAX);
+			head = h_node.get();
+			tail = t_node.get();
+			head->next = tail;
+			storage.push_back(std::move(h_node));
+			storage.push_back(std::move(t_node));
+		}
+	}
+
+	Node *search(int k) const;
+	Node *insert_elem(int k);
+	Node *erase_elem(int k);
+	// Запрет копирования
+	Skip_List(const Skip_List &) = delete;
+	Skip_List &operator=(const Skip_List &) = delete;
+	// Разрешение перемещения
+	Skip_List(Skip_List &&) noexcept = default;
+	Skip_List &operator=(Skip_List &&) noexcept = default;
+
+	~Skip_List() = default;
+
+private:
+	int max_lvl = 32;
+	Node *head;										// Сырые указатели
+	Node *tail;										// Сырые указатели
+	std::list<std::unique_ptr<Node>> storage;		// Единственный владелец всех узлов(Хранилище)
+	
+	using storage_it = std::list<std::unique_ptr<Node>>::iterator;
+	std::unordered_multimap<int, storage_it> index;	// Хранит итераторы(только наблюдатели)
+
+	mutable std::shared_mutex mtx_;					// mutable для блокировки в const foo
+};
 //================================================================================================================
 long long randint()
 {
