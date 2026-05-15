@@ -1,27 +1,23 @@
 #include <vector>
-#include <iostream>
 #include <memory>
-#include <list>
 #include <utility>
-#include <unordered_map>
 #include <ctime>
 #include <shared_mutex>
-#include <thread>
-#include <chrono>
-#include <limits>
+#include <algorithm>
 #include <mutex>
+#include <climits>
+#include <iostream>
+#include <chrono>
 //================================================================================================================
 struct Node
 {
-	Node(Node *n, Node *d, int k)
-		: next(n), down(d), key(k)
+	Node(int k, int lvl)
+		: moving(lvl + 1, nullptr), key(k)
 	{
 	}
 
-	Node *next;			// link to next element lvl
-	Node *down;			// link to element down
-
-	int key;			// element key
+	std::vector<Node *> moving;
+	int key;
 };
 //================================================================================================================
 class Skip_List
@@ -31,11 +27,13 @@ public:
 		: head(h), tail(t)
 	{
 		if (!head && !tail) {				// Создание границ для head/tail
-			auto h_node = std::make_unique<Node>(nullptr, nullptr, INT_MIN);
-			auto t_node = std::make_unique<Node>(nullptr, nullptr, INT_MAX);
+			auto h_node = std::make_unique<Node>(INT_MIN, max_lvl);
+			auto t_node = std::make_unique<Node>(INT_MAX, max_lvl);
 			head = h_node.get();
 			tail = t_node.get();
-			head->next = tail;
+			for (int i = 0; i < max_lvl; ++i)
+				head->moving[i] = tail;
+
 			storage.push_back(std::move(h_node));
 			storage.push_back(std::move(t_node));
 		}
@@ -43,24 +41,21 @@ public:
 
 	Node *search(int k) const;
 	Node *insert_elem(int k);
-	Node *erase_elem(int k);
+	bool erase_elem(int k);
 	// Запрет копирования
 	Skip_List(const Skip_List &) = delete;
 	Skip_List &operator=(const Skip_List &) = delete;
 	// Разрешение перемещения
-	Skip_List(Skip_List &&) noexcept = default;
+	Skip_List(Skip_List &&) noexcept = default;                     // noexcept - функция не выдаст исключение!
 	Skip_List &operator=(Skip_List &&) noexcept = default;
 
 	~Skip_List() = default;
 
 private:
-	int max_lvl = 32;
 	Node *head;										// Сырые указатели
 	Node *tail;										// Сырые указатели
-	std::list<std::unique_ptr<Node>> storage;		// Единственный владелец всех узлов(Хранилище)
-	
-	using storage_it = std::list<std::unique_ptr<Node>>::iterator;
-	std::unordered_multimap<int, storage_it> index;	// Хранит итераторы(только наблюдатели)
+	int max_lvl = 32;
+	std::vector<std::unique_ptr<Node>> storage;
 
 	mutable std::shared_mutex mtx_;					// mutable для блокировки в const foo
 };
@@ -93,48 +88,23 @@ Node *Skip_List::search(int k) const
 	if (!current)
 		return nullptr;
 
-	while (current && current != tail) {			// Цикл пока не пришли в конец списка
+		for (int i = max_lvl - 1; i >= 0; --i)
+		{
+			while (current->moving[i] && current->moving[i] != tail && current->moving[i]->key < k)
+				current = current->moving[i];
 
-		if (!current->next) {
-			if (current->down)
-				current = current->down;
-			else
-				return nullptr;
-			continue;
+			if (current->moving[i] && current->moving[i] != tail && current->moving[i]->key == k)	// Следующий элемент соответствует искомому
+				return current->moving[i];			// Вернули ссылку на найденный элемент
 		}
-
-		if (current->next->key > k) {				// Проверяем значение следующего элемента на текущем уровне
-			if (!current->down)
-				return nullptr;
-			current = current->down;				// Двигаем поиск на уровень ниже
-		}
-
-		else if (current->next == tail) {			// Проверяем не является ли следующим элементом конец Списка
-			if (!current->down)
-				return nullptr;
-			current = current->down;				// Двигаем поиск на уровень ниже
-		}
-
-		else if (current->next->key == k)			// Следующий элемент соответствует искомому
-			return current->next;					// Вернули ссылку на найденный элемент
-
-		else if (current->next->key < k)
-			current = current->next;				// Двигаемся к следующему элементу на текущем уровне
-
-		else return nullptr;
-	}
+	return nullptr;
 }
 //================================================================================================================
 Node *Skip_List::insert_elem(int k)
 {
 	std::unique_lock<std::shared_mutex> lock(mtx_);	// Блокировка на запись
-
 	const unsigned long long m = 1ULL << 31;		// Константа для LCG
-
 	Node *current = head;
-
-	Node *update[32] = {};							// Хранилище: после каких узлов строится башня=(next)  Сырые указатели
-	Node *tower[32] = {};							// Хранилище: для строительства этажей башни===(down)  Сырые указатели
+	Node *update[32] = {};							// Хранилище: Сырые указатели
 
 	if (!current)
 		return nullptr;
@@ -146,98 +116,60 @@ Node *Skip_List::insert_elem(int k)
 	for (int i = max_lvl - 1; i >= 0; --i) {		// Поиск + заполнение update
 		if (!current) return nullptr;
 
-		while (current->next && current->next != tail && current->next->key < k)
-			current = current->next;
+		while (current->moving[i] && current->moving[i] != tail && current->moving[i]->key < k)
+			current = current->moving[i];
 
 		if (i < height)
 			update[i] = current;
-
-		if (current->down)
-			current = current->down;
 	}
-	// Создать все узлы
+	if ((current->moving[0] && current->moving[0] != tail) && current->moving[0]->key == k)
+		return nullptr;
 
-	Node *n = nullptr;
-	Node *d = nullptr;
-	auto node = std::make_unique<Node>(n, d, k);	// Создаёт Node(n,d,k) и заворачивает в unique_ptr
-	Node *ptr = node.get();							// raw для навигации
-	
-	auto iter = storage.insert(storage.end(), std::move(node));// Начинаем заполнять хранилище узлами
-	index.insert({ k, iter });						// Добавляем пару ключ-итератор
-	tower[0] = ptr;									// Добавляем узел на 0 ур
+	auto node = std::make_unique<Node>(k, height);	// Создаёт Node(k, height) и заворачивает в unique_ptr
+	Node *ptr = node.get();							// raw_ptr для навигации
 
-	for (int j = 1; j < height; ++j) {				// Создаём узлы с 1 ур выше
-		auto temp_ptr = std::make_unique<Node>(n, d, k);
-		Node *raw = temp_ptr.get();					// Для навигации
-		auto temp_iter = storage.insert(storage.end(), std::move(temp_ptr));// Продолжаем заполнять хранилище, передаем право владения в storage при помощи move-семантики
-		index.insert({ k, temp_iter });				// Добавляем пару ключ-итератор
-		tower[j] = raw;								// Заполяняется башня уровнями
-		raw->down = tower[j - 1];					// Строим *down связи (снизу-вверх) башни
+	for (int i = 0; i < height; i++) {
+		ptr->moving[i] = update[i]->moving[i];		// Новый узел, смотрит туда же, куда смотрел предыдущий
+		update[i]->moving[i] = ptr;					// Предыдущий узел, теперь твой сосед — это новый узел
 	}
+	storage.push_back(std::move(node));
 
-	for (int i = 0; i < height; ++i) {				// Вставить все узлы ч/з update
-		if (update[i]) {
-			tower[i]->next = update[i]->next;		// Строим next связи на вставляемый объект
-			update[i]->next = tower[i];
-		}
-	}
-
-	return tower[0];
+	return ptr;
 }
 //================================================================================================================
-Node *Skip_List::erase_elem(int k)
+bool Skip_List::erase_elem(int k)
 {
 	std::unique_lock<std::shared_mutex> lock(mtx_);	// Блокировка на запись
 
-	Node *update[32] = {};							// Сырые указатели
-	Node *current = head;							// Сырой указатель
+	Node *update[32] = {};
+	Node *current = head;
 
-	if (!current) return nullptr;
+	if (!current) return false;
 
 	for (int i = max_lvl - 1; i >= 0; --i) {		// Заполнение update[] - Для всех урвоней
 		if (!current) break;
 
-		while (current->next && current->next != tail && current->next->key < k)
-			current = current->next;				// Двигаемся вправо по списку пока следующий элемент меньше чем целевой
+		while (current->moving[i] && current->moving[i] != tail && current->moving[i]->key < k)
+			current = current->moving[i];				// Двигаемся вправо по списку пока следующий элемент меньше чем целевой
 
 		update[i] = current;						// Запоминаем позицию перед спуском
-		if (current->down) current = current->down;
 	}
 
-	Node *del_node = update[0]->next;				
+	Node *del_node = update[0]->moving[0];				
 
 	if (!del_node || del_node == tail || del_node->key != k)
-		return nullptr;
-
-	std::vector<Node *> deling;
+		return false;
 
 	for (int i = 0; i < max_lvl; ++i) {
-		if (update[i]->next && update[i]->next->key == k)// Разрыв связей для последующего удаления
-		{
-			Node *deli = update[i]->next;
-			update[i]->next = deli->next;
-			deling.push_back(deli);
-		}
+		if (update[i]->moving[i] && update[i]->moving[i] == del_node)// Разрыв связей для последующего удаления
+			update[i]->moving[i] = update[i]->moving[i]->moving[i];
 		else break;
 	}
 
-	auto map_it = index.equal_range(k);
+	auto ptr_del = std::remove_if(storage.begin(), storage.end(), [del_node](auto &ptr) { return ptr.get() == del_node; });
 
-	for (auto it = map_it.first; it != map_it.second; ++it) {
-		Node *ptr = it->second->get();					// Возвращает сырой указатель на управляемый объект
-		bool is_deling = false;
+	storage.erase(ptr_del, storage.end());
 
-		for (Node *s : deling)
-			if (s == ptr) {
-				is_deling = true;
-				break;
-			}
-
-		if (is_deling)
-			storage.erase(it->second);				// Уничтожается unique_ptr, вызывается деструктор Node, память свободна
-	}
-	index.erase(k);									// Удаление всех пар с ключом
-
-	return del_node;								// Для возможности использовать bool - узнать статус удаления
+	return true;
 }
 //================================================================================================================
