@@ -6,6 +6,16 @@
 *.VC.db
 .vs/
 
+**/*.vcxproj
+**/*.vcxproj.filters
+**/*.vcxproj.user
+*.slnx
+.vs/
+Debug/
+Release/
+x64/
+build/
+
 *.obj
 *.exe
 *.pdb

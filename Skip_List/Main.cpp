@@ -31,6 +31,7 @@ public:
 			auto t_node = std::make_unique<Node>(INT_MAX, max_lvl);
 			head = h_node.get();
 			tail = t_node.get();
+
 			for (int i = 0; i < max_lvl; ++i)
 				head->moving[i] = tail;
 
@@ -42,6 +43,7 @@ public:
 	Node *search(int k) const;
 	Node *insert_elem(int k);
 	bool erase_elem(int k);
+
 	// Запрет копирования
 	Skip_List(const Skip_List &) = delete;
 	Skip_List &operator=(const Skip_List &) = delete;
@@ -52,8 +54,9 @@ public:
 	~Skip_List() = default;
 
 private:
-	Node *head;										// Сырые указатели
-	Node *tail;										// Сырые указатели
+	Node *head;
+	Node *tail;
+
 	int max_lvl = 32;
 	std::vector<std::unique_ptr<Node>> storage;
 
@@ -93,8 +96,8 @@ Node *Skip_List::search(int k) const
 			while (current->moving[i] && current->moving[i] != tail && current->moving[i]->key < k)
 				current = current->moving[i];
 
-			if (current->moving[i] && current->moving[i] != tail && current->moving[i]->key == k)	// Следующий элемент соответствует искомому
-				return current->moving[i];			// Вернули ссылку на найденный элемент
+			if (current->moving[i] && current->moving[i] != tail && current->moving[i]->key == k)
+				return current->moving[i];
 		}
 	return nullptr;
 }
@@ -132,6 +135,7 @@ Node *Skip_List::insert_elem(int k)
 		ptr->moving[i] = update[i]->moving[i];		// Новый узел, смотрит туда же, куда смотрел предыдущий
 		update[i]->moving[i] = ptr;					// Предыдущий узел, теперь твой сосед — это новый узел
 	}
+
 	storage.push_back(std::move(node));
 
 	return ptr;
@@ -155,7 +159,7 @@ bool Skip_List::erase_elem(int k)
 		update[i] = current;						// Запоминаем позицию перед спуском
 	}
 
-	Node *del_node = update[0]->moving[0];				
+	Node *del_node = update[0]->moving[0];
 
 	if (!del_node || del_node == tail || del_node->key != k)
 		return false;
