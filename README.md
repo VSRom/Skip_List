@@ -1,5 +1,5 @@
 ## Skip-List Implementation (C++17)
-- Потокобезопасная структура данных с O(log n) операциями
-- std::unique_ptr для владения, raw pointers для навигации
+- Thread-safe data structure with O(log n) operations
+- std::unique_ptr for ownership, raw pointers for navigation
 - std::shared_mutex: concurrent reads, exclusive writes
-- Sentinel nodes (INT_MIN/INT_MAX) для упрощения граничных условий
+- Sentinel nodes (INT_MIN/INT_MAX) for simplification of boundary conditions
